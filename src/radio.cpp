@@ -32,7 +32,7 @@ void setupRadio()
     // radio.writeReg(0x03, 0x00);
     // radio.writeReg(0x04, 0xA0);
 
-/*
+
     // BitRate = 100 kbps ------------------------------
     radio.writeReg(0x03, 0x01);
     radio.writeReg(0x04, 0x40);
@@ -47,7 +47,7 @@ void setupRadio()
     // AFC bandwidth ≈ 250 kHz
     radio.writeReg(0x1A, 0x8A);
 
-
+/*
     // BitRate ≈ 150.2 kbps ------------------------------
     radio.writeReg(0x03, 0x00);
     radio.writeReg(0x04, 0xD5);
@@ -92,7 +92,6 @@ void setupRadio()
     // AFC bandwidth ≈ 500 kHz
     radio.writeReg(0x1A, 0x81);
 
-    */
 
     // BitRate ≈ 299 kbps ------------------------------
     radio.writeReg(0x03, 0x00);
@@ -107,4 +106,5 @@ void setupRadio()
 
     // Максимальная AFC BW
     radio.writeReg(0x1A, 0x80);
+    */
 }

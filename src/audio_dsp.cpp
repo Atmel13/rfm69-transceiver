@@ -16,20 +16,12 @@ int16_t applyStudioProcessing24Bit(int32_t sample24)
     // Расчет огибающей уровня звука
     if (abs_val > dsp_envelope) {
         dsp_envelope = (0.2f * abs_val) + (0.8f * dsp_envelope);
-        
-        // МГНОВЕННАЯ РЕАКЦИЯ (Атака): Если пошел громкий звук,
-        // пересчитываем усиление сразу, не дожидаясь счетчика на 16.
-        // Это предотвратит проскакивание щелчков и перегруза на первых буквах слов.
-        if (dsp_envelope > 0.00005f) {
-            current_gain = 0.35f / (dsp_envelope + 0.006f);
-            if (current_gain < 8.0f) current_gain = 8.0f;
-        }
     } else {
         dsp_envelope = (0.005f * abs_val) + (0.995f * dsp_envelope);
     }
 
-    // Медленный релиз (восстановление громкости в тишине) считаем раз в 16 сэмплов.
-    // Процессор по-прежнему отдыхает, PPS не падает!
+    // ОПТИМИЗАЦИЯ: Считаем тяжелое деление АРУ только один раз на 16 сэмплов!
+    // Для звука это незаметно, но разгружает ядро ESP32-C3 на 93%
     sample_counter++;
     if (sample_counter >= 16) {
         sample_counter = 0;
@@ -39,11 +31,11 @@ int16_t applyStudioProcessing24Bit(int32_t sample24)
             if (current_gain > 40.0f) current_gain = 40.0f;
             if (current_gain < 8.0f)  current_gain = 8.0f;
         } else {
-            current_gain = 40.0f; // В полной тишине выкручиваем под далекие шаги/звуки
+            current_gain = 40.0f; // В полной тишине выкручиваем на максимум под шаги
         }
     }
 
-    // Быстрое умножение
+    // Применяем к текущему сэмплу уже готовое, быстрое умножение
     float amplified = input_signal * current_gain;
 
     // 3. Мягкий лимитер

@@ -30,7 +30,7 @@ int8_t adpcm_step_index = 0;
 uint32_t txPacketCount = 0;
 uint32_t lastTxTime = 0;
 
-// --- Глобальная переменная для Шумоподавителя (теперь под 24 бита) ---
+// --- Глобальная переменная для Шумоподавителя ---
 float gate_envelope_24 = 0.0f;
 
 // --- Таблицы IMA-ADPCM ---
@@ -75,47 +75,55 @@ void setupI2S()
     i2s_set_pin(I2S_PORT, &pin_config);
 }
 
-// --- 24-битная студийная обработка с конвертацией в 16 бит ---
+// --- Студийная обработка с правильным усилением и компрессией ---
 int16_t applyStudioProcessing24Bit(int32_t sample24)
 {
-    // 1. ПРЕДУСИЛИТЕЛЬ
-    // Конвертируем в float без потери точности (мантисса float покрывает 24 бита)
-    float gain = 10.0f;
-    float amplified = (float)sample24 * gain;
+    // 1. Перевод во float (-1.0 ... 1.0)
+    float input_signal = (float)sample24 / 8388608.0f;
+    float abs_val = abs(input_signal);
 
-    // Считаем огибающую для 24-битного сигнала
-    float abs_val = abs(amplified);
-    gate_envelope_24 = (0.01f * abs_val) + (0.99f * gate_envelope_24);
+    // Быстрая атака (0.3) позволяет мгновенно реагировать на тихий голос
+    gate_envelope_24 = (0.3f * abs_val) + (0.7f * gate_envelope_24);
 
-    // 2. ШУМОПОДАВИТЕЛЬ (Noise Gate)
-    // Порог увеличен в 256 раз (по сравнению с 16-битной версией)
-    float gate_threshold = 102400.0f;
+    // 2. УМНЫЙ ШУМОПОДАВИТЕЛЬ (Порог снижен для дальнего расстояния)
+    float gate_threshold = 0.0004f; 
     if (gate_envelope_24 < gate_threshold)
     {
-        amplified *= (gate_envelope_24 / gate_threshold);
+        // Плавное, а не жесткое глушение шума в полной тишине
+        input_signal *= (gate_envelope_24 / gate_threshold);
     }
 
-    // 3. МЯГКИЙ ЛИМИТЕР (Soft Clipper)
-    // Порог срабатывания лимитера (24000 * 256)
-    float limit_threshold = 6144000.0f;
+    // 3. ДИНАМИЧЕСКИЙ КОМПРЕССОР (Замена фиксированного Gain)
+    // Если сигнал слабый (ты далеко), этот алгоритм автоматически 
+    // поднимает усиление вплоть до 45 раз!
+    float target_gain = 1.0f;
+    if (gate_envelope_24 > 0.0001f) {
+        // Вычисляем необходимый коэффициент усиления, чтобы подтянуть звук к оптимуму (0.4)
+        target_gain = 0.4f / (gate_envelope_24 + 0.005f);
+        
+        // Ограничиваем максимальное усиление, чтобы не слушать шум стен (макс х45)
+        if (target_gain > 45.0f) target_gain = 45.0f;
+        if (target_gain < 5.0f)  target_gain = 5.0f; // Мин усиление для близкого расстояния
+    }
+
+    float amplified = input_signal * target_gain;
+
+    // 4. МЯГКИЙ ЛИМИТЕР (Защита от хрипа при приближении к микрофону)
+    float limit_threshold = 0.8f;
     if (amplified > limit_threshold)
     {
-        amplified = limit_threshold + (amplified - limit_threshold) * 0.3f;
+        amplified = limit_threshold + (amplified - limit_threshold) * 0.1f;
     }
     else if (amplified < -limit_threshold)
     {
-        amplified = -limit_threshold + (amplified + limit_threshold) * 0.3f;
+        amplified = -limit_threshold + (amplified + limit_threshold) * 0.1f;
     }
 
-    // 4. КОНВЕРТАЦИЯ В 16 БИТ
-    // Делим на 2^8 (256), чтобы пропорционально сжать 24-битный сигнал до 16-битного
-    float out_16 = amplified / 256.0f;
+    // 5. Конвертация в 16 бит
+    float out_16 = amplified * 32767.0f;
 
-    // 5. ЖЕСТКАЯ ЗАЩИТА (Clipping prevention на уровне 16 бит)
-    if (out_16 > 32767.0f)
-        out_16 = 32767.0f;
-    if (out_16 < -32768.0f)
-        out_16 = -32768.0f;
+    if (out_16 > 32767.0f)  out_16 = 32767.0f;
+    if (out_16 < -32768.0f) out_16 = -32768.0f;
 
     return (int16_t)out_16;
 }
@@ -235,21 +243,17 @@ void loop()
 
         for (int i = 0; i < samples_read; i++)
         {
-            // 1. ИЗВЛЕКАЕМ 24 БИТА
-            // Сдвигаем на 8 вправо, чтобы убрать пустые биты контейнера.
-            // При этом сохраняется знак (число остается отцентрованным вокруг нуля).
+            // Извлекаем чистые знаковые 24 бита
             int32_t raw_24 = i2s_data[i] >> 8;
 
-            // 2. ПРИМЕНЯЕМ ОБРАБОТКУ
-            // Функция считает всё в 24 битах и отдает чистые 16 бит
+            // Применяем новую float-компрессию и нормализацию
             int16_t processed_pcm_16 = applyStudioProcessing24Bit(raw_24);
 
-            // 3. ОТПРАВЛЯЕМ В КОДЕР
+            // Отправляем в кодер
             processPcmSample(processed_pcm_16);
         }
     }
 
-    // Каждую секунду выводим результат в консоль
     if (millis() - lastTxTime >= 1000)
     {
         Serial.printf("TX Packets per second: %u\n", txPacketCount);
